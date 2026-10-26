@@ -60,6 +60,8 @@ def test_missing_token_gives_clear_error(client, monkeypatch):
     monkeypatch.setenv("MOCK_VLM", "0")
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     r = client.post("/api/identify", data={"note": "battery"})
     assert r.status_code == 502
     assert "HF_TOKEN" in r.json()["detail"]

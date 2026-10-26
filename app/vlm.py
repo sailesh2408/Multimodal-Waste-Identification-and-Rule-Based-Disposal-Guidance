@@ -3,16 +3,21 @@
 The model only names the item and picks keys from the closed taxonomy.
 It never decides the disposal method; that comes from the rules table.
 
-Backends, tried in order (whichever are configured):
-  1. OpenRouter free tier  (OPENROUTER_API_KEY) - Gemma 4, no cost, rate limited
-  2. Hugging Face Inference Providers (HF_TOKEN) - same Gemma 4, needs HF credits
+Backends, tried in order (whichever keys are set):
+  1. Google AI Studio (GEMINI_API_KEY) - Gemma 4 / Gemini Flash on your own free quota
+  2. OpenRouter free tier (OPENROUTER_API_KEY) - shared free pool, often busy
+  3. Hugging Face Inference Providers (HF_TOKEN) - same Gemma 4, needs HF credits
 """
 import base64
 import json
 import os
 import re
 import time
+from dataclasses import dataclass, field
+from types import SimpleNamespace
+from typing import Any, Callable
 
+import httpx
 from huggingface_hub import InferenceClient
 from pydantic import BaseModel, Field
 
@@ -21,8 +26,10 @@ from .taxonomy import (
     keyword_guess, normalize_condition, normalize_item_type, normalize_material,
 )
 
-DEFAULT_MODELS = "google/gemma-4-26B-A4B-it,Qwen/Qwen3-VL-8B-Instruct"
-OPENROUTER_URL = "https://openrouter.ai/api/v1"
+GOOGLE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+DEFAULT_GOOGLE_MODELS = "gemma-4-26b-a4b-it,gemini-2.5-flash,gemini-2.5-flash-lite"
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Free vision models from different upstream providers, so one throttled upstream doesn't block us.
 DEFAULT_OPENROUTER_MODELS = ",".join([
     "google/gemma-4-26b-a4b-it:free",       # Google AI Studio
@@ -31,6 +38,9 @@ DEFAULT_OPENROUTER_MODELS = ",".join([
     "nvidia/nemotron-3.5-super-vl:free",    # NVIDIA
     "openrouter/free",                      # any free model that accepts images
 ])
+
+DEFAULT_MODELS = "google/gemma-4-26B-A4B-it,Qwen/Qwen3-VL-8B-Instruct"  # Hugging Face
+
 TIME_BUDGET_SECONDS = 35  # stop starting new attempts after this; Vercel's function limit is 60 s
 MAX_TOKENS = 700
 ACCOUNT_ERRORS = (401, 402, 403)  # the same key will fail for every model on that backend
@@ -120,17 +130,69 @@ def _split(value: str) -> list[str]:
     return [m.strip() for m in value.split(",") if m.strip()]
 
 
-def _backends() -> list[tuple[str, InferenceClient, list[str], dict]]:
-    """Configured backends as (name, client, models, extra request params), free one first."""
+class OpenAICompatible:
+    """Minimal client for OpenAI-style chat/completions endpoints (Google AI Studio, OpenRouter).
+
+    Mirrors the `client.chat.completions.create(...)` shape of InferenceClient so backends are
+    interchangeable; HTTP errors are raised as httpx.HTTPStatusError, which carries `.response`.
+    """
+
+    def __init__(self, url: str, api_key: str, headers: dict | None = None, timeout: float = 25):
+        self.url = url
+        self.headers = {"Authorization": f"Bearer {api_key}", **(headers or {})}
+        self.timeout = timeout
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, model: str, messages: list, extra_body: dict | None = None, **params):
+        payload = {"model": model, "messages": messages, **params, **(extra_body or {})}
+        response = httpx.post(self.url, json=payload, headers=self.headers, timeout=self.timeout)
+        response.raise_for_status()
+        choices = response.json().get("choices")
+        if not choices:
+            raise ValueError("reply had no choices")
+        content = choices[0].get("message", {}).get("content")
+        if isinstance(content, list):  # some providers return content parts
+            content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+
+@dataclass
+class Backend:
+    name: str
+    key_env: str
+    client: Any
+    models: list[str]
+    extra_for: Callable[[str], dict] = field(default=lambda model: {})
+
+
+def _google_extra(model: str) -> dict:
+    # Gemini 2.5 Flash "thinks" by default and thinking can eat the token budget; Gemma doesn't think.
+    if model.startswith("gemini-2.5-flash"):
+        return {"extra_body": {"reasoning_effort": "none"}}
+    return {}
+
+
+def _backends() -> list[Backend]:
+    """Configured backends, most reliable free one first."""
     backends = []
+    if key := os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+        backends.append(Backend(
+            "Google AI Studio", "GEMINI_API_KEY", OpenAICompatible(GOOGLE_URL, key),
+            _split(os.getenv("GOOGLE_MODELS", DEFAULT_GOOGLE_MODELS)), _google_extra,
+        ))
     if key := os.getenv("OPENROUTER_API_KEY"):
-        client = InferenceClient(base_url=OPENROUTER_URL, api_key=key, timeout=25, headers={"X-Title": "Waste Guide"})
-        # Reasoning tokens count against max_tokens; some free models reason at high effort by default.
-        extra = {"extra_body": {"reasoning": {"effort": "none"}}}
-        backends.append(("OpenRouter", client, _split(os.getenv("OPENROUTER_MODELS", DEFAULT_OPENROUTER_MODELS)), extra))
+        backends.append(Backend(
+            "OpenRouter", "OPENROUTER_API_KEY", OpenAICompatible(OPENROUTER_URL, key, {"X-Title": "Waste Guide"}),
+            _split(os.getenv("OPENROUTER_MODELS", DEFAULT_OPENROUTER_MODELS)),
+            # Reasoning tokens count against max_tokens; some free models reason at high effort by default.
+            lambda model: {"extra_body": {"reasoning": {"effort": "none"}}},
+        ))
     if token := os.getenv("HF_TOKEN"):
-        client = InferenceClient(provider=os.getenv("HF_PROVIDER", "auto"), api_key=token, timeout=25)
-        backends.append(("Hugging Face", client, _split(os.getenv("VLM_MODELS", DEFAULT_MODELS)), {}))
+        backends.append(Backend(
+            "Hugging Face", "HF_TOKEN",
+            InferenceClient(provider=os.getenv("HF_PROVIDER", "auto"), api_key=token, timeout=25),
+            _split(os.getenv("VLM_MODELS", DEFAULT_MODELS)),
+        ))
     return backends
 
 
@@ -139,9 +201,12 @@ def _status(exc: Exception) -> int | None:
 
 
 def _server_detail(exc: Exception) -> str:
-    """The provider's own explanation, e.g. OpenRouter's error.message plus metadata.raw."""
+    """The provider's own explanation (OpenRouter error.message + metadata.raw, Google error.message)."""
     try:
-        err = exc.response.json().get("error")
+        body = exc.response.json()
+        if isinstance(body, list) and body:  # Google wraps errors in a list
+            body = body[0]
+        err = body.get("error")
         if isinstance(err, str):
             return err[:300]
         meta = err.get("metadata") or {}
@@ -151,32 +216,43 @@ def _server_detail(exc: Exception) -> str:
         return str(getattr(exc, "server_message", None) or exc)[:300]
 
 
-def _is_account_limit(detail: str) -> bool:
-    """OpenRouter's per-account free limits (as opposed to a busy upstream provider)."""
-    return any(k in detail.lower() for k in ("per-day", "per-min", "per day", "per minute"))
+def _bad_key(detail: str) -> bool:
+    d = detail.lower()  # Google answers a bad key with HTTP 400 and one of these messages
+    return any(k in d for k in ("api key not valid", "api_key_invalid", "valid api key"))
 
 
-def _friendly_error(exc: Exception, backend: str, detail: str = "") -> str:
-    status = _status(exc)
-    key_name = "OPENROUTER_API_KEY" if backend == "OpenRouter" else "HF_TOKEN"
-    if status == 401:
-        return f"The {backend} key is invalid. Check {key_name}."
+def _is_account_problem(status: int | None, detail: str) -> bool:
+    """Errors where every other model on the same backend would fail the same way."""
+    d = detail.lower()
+    return (
+        status in ACCOUNT_ERRORS
+        or _bad_key(detail)
+        or any(k in d for k in ("per-day", "per-min", "per day", "per minute"))  # OpenRouter account quota
+    )
+
+
+def _friendly_error(exc: Exception, backend: Backend, detail: str = "") -> str:
+    status, d, name = _status(exc), detail.lower(), backend.name
+    if status == 401 or _bad_key(detail):
+        return f"The {name} key is invalid. Check {backend.key_env}."
     if status == 402:
-        if backend == "OpenRouter":
-            return "OpenRouter needs credits for this model. Use ':free' models in OPENROUTER_MODELS."
-        return ("Your Hugging Face account has no inference credits (free accounts get none). "
-                "Add credits at huggingface.co/settings/billing, or set OPENROUTER_API_KEY to use the free tier.")
+        if name == "Hugging Face":
+            return ("Your Hugging Face account has no inference credits (free accounts get none). "
+                    "Add credits at huggingface.co/settings/billing, or set GEMINI_API_KEY to use Google's free tier.")
+        return f"{name} needs credits for this model."
     if status == 403:
-        if backend == "OpenRouter":
-            return "OpenRouter refused the request. Check the key's limits and your privacy settings for free models."
-        return "The Hugging Face token lacks permission. Enable 'Make calls to Inference Providers' on the token."
+        if name == "Hugging Face":
+            return "The Hugging Face token lacks permission. Enable 'Make calls to Inference Providers' on the token."
+        return f"{name} refused the request. Check that {backend.key_env} is allowed to use this API."
     if status == 429:
-        if backend == "OpenRouter" and "day" in detail.lower():
+        if name == "OpenRouter" and "day" in d and _is_account_problem(status, detail):
             return "Today's free scans on OpenRouter are used up (50 a day; 1000 after a one-time $10 top-up). Try again tomorrow."
-        if backend == "OpenRouter" and _is_account_limit(detail):
+        if name == "OpenRouter" and _is_account_problem(status, detail):
             return "Too many scans in the last minute. Wait a minute and try again."
-        return f"The free vision models on {backend} are busy right now. Please try again in a minute."
-    return f"The vision model on {backend} could not be reached ({status or type(exc).__name__})."
+        if name == "Google AI Studio":
+            return "Your free Google AI Studio quota is used up for now. Wait a minute (or until tomorrow) and try again."
+        return f"The free vision models on {name} are busy right now. Please try again in a minute."
+    return f"The vision model on {name} could not be reached ({status or type(exc).__name__})."
 
 
 def _mock_identify(note: str) -> Identification:
@@ -201,7 +277,7 @@ def identify(image: bytes | None, mime: str = "image/jpeg", note: str = "") -> I
 
     backends = _backends()
     if not backends:
-        raise VLMError("No vision model is configured. Set OPENROUTER_API_KEY (free) or HF_TOKEN.")
+        raise VLMError("No vision model is configured. Set GEMINI_API_KEY (free), OPENROUTER_API_KEY or HF_TOKEN.")
 
     content: list[dict] = []
     if image:
@@ -211,16 +287,17 @@ def identify(image: bytes | None, mime: str = "image/jpeg", note: str = "") -> I
     messages = [{"role": "user", "content": content}]
 
     deadline = time.monotonic() + TIME_BUDGET_SECONDS
-    errors: list[tuple[bool, str]] = []  # (is account-level, message)
-    for backend, client, models, extra in backends:
-        for model in models:
+    errors: list[tuple[bool, str]] = []  # (account-level?, message)
+    for backend in backends:
+        for model in backend.models:
             status, detail = None, ""
             for _attempt in range(2):
                 if time.monotonic() > deadline:
                     raise VLMError("The vision model is taking too long right now. Please try again.")
                 try:
-                    reply = client.chat.completions.create(
-                        model=model, messages=messages, max_tokens=MAX_TOKENS, temperature=0.1, **extra,
+                    reply = backend.client.chat.completions.create(
+                        model=model, messages=messages, max_tokens=MAX_TOKENS, temperature=0.1,
+                        **backend.extra_for(model),
                     )
                     return parse_identification(reply.choices[0].message.content, model=model)
                 except ValueError:  # includes JSONDecodeError and empty replies: retry the same model once
@@ -228,12 +305,11 @@ def identify(image: bytes | None, mime: str = "image/jpeg", note: str = "") -> I
                     continue
                 except Exception as exc:  # provider error: move on to the next model
                     status, detail = _status(exc), _server_detail(exc)
-                    print(json.dumps({"log": "vlm_error", "backend": backend, "model": model,
+                    print(json.dumps({"log": "vlm_error", "backend": backend.name, "model": model,
                                       "status": status, "detail": detail}), flush=True)
-                    account_level = status in ACCOUNT_ERRORS or _is_account_limit(detail)
-                    errors.append((account_level, _friendly_error(exc, backend, detail)))
+                    errors.append((_is_account_problem(status, detail), _friendly_error(exc, backend, detail)))
                     break
-            if status in ACCOUNT_ERRORS or _is_account_limit(detail):
+            if _is_account_problem(status, detail):
                 break  # key, billing or account quota problem: this backend's other models will fail too
     account = [msg for is_account, msg in errors if is_account]
     raise VLMError((account or [msg for _, msg in errors] or ["No vision models configured."])[0])

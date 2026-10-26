@@ -15,10 +15,11 @@ The AI only identifies the item. The disposal advice always comes from `data/rul
 
 1. Go to <https://vercel.com/new> and import this GitHub repository. Vercel detects FastAPI automatically, so you don't need to change any settings.
 2. Before clicking **Deploy**, open **Environment Variables** and add at least one of these:
-   - `OPENROUTER_API_KEY` (**free**). Create one at <https://openrouter.ai/settings/keys>. It runs the open Gemma 4 model at no cost, limited to 20 scans per minute and 50 per day.
-   - `HF_TOKEN` (paid). This needs Hugging Face inference credits, since free HF accounts get none. Each scan costs well under a tenth of a cent. Create a **fine-grained** token at <https://huggingface.co/settings/tokens> and tick **Make calls to Inference Providers**.
+   - `GEMINI_API_KEY` (**free, recommended**). Create one at <https://aistudio.google.com/apikey>. It runs Gemma 4, falling back to Gemini Flash, on your own free Google quota.
+   - `OPENROUTER_API_KEY` (free, but shared). Create one at <https://openrouter.ai/settings/keys>. The free models are shared by everyone and are often busy.
+   - `HF_TOKEN` (paid). This needs Hugging Face inference credits, since free HF accounts get none. Create a **fine-grained** token with **Make calls to Inference Providers** ticked.
 
-   If you set both, the free tier is tried first and Hugging Face takes over when it hits its limit.
+   The app tries them in the order above and moves to the next one if a service is busy or out of quota. If a scan fails, look for `vlm_error` in Vercel's **Logs** to see each provider's own error message.
 3. Click **Deploy**, then open the URL on your phone. To install it like an app, use **Share → Add to Home Screen**.
 
 Every push to `main` redeploys automatically. Optional variables (`VLM_MODELS`, `CONFIDENCE_THRESHOLD`, `DEFAULT_REGION`) are listed in [`.env.example`](.env.example).
@@ -47,7 +48,7 @@ It prints a phone URL you can open on the same Wi-Fi. If you set `MOCK_VLM=1` in
 | Step | File | What happens |
 |---|---|---|
 | Capture | `static/app.js` | The phone camera opens via `<input capture>`. The photo is shrunk to 1280 px JPEG before upload, which keeps it well under Vercel's 4.5 MB limit. |
-| Identify | `app/vlm.py` | The photo and optional text go to the open VLM `google/gemma-4-26B-A4B-it`. It's served free through OpenRouter, or through Hugging Face Inference Providers as a paid fallback. The model must pick `item_type`, `material` and `condition` from `data/taxonomy.json`. |
+| Identify | `app/vlm.py` | The photo and optional text go to the open VLM `google/gemma-4-26B-A4B-it`. It runs on Google AI Studio's free tier, with Gemini Flash as a fallback. OpenRouter's free tier and Hugging Face Inference Providers (paid) can also serve it. The model must pick `item_type`, `material` and `condition` from `data/taxonomy.json`. |
 | Confidence gate | `app/main.py` → `confirmation()` | The user is asked to confirm if the item is unknown, if confidence is below `CONFIDENCE_THRESHOLD`, or if a hazardous alternative (for example a battery) is possible. |
 | Decide | `app/rules.py` | If any matching row is hazardous, hazardous rows win. Otherwise the most specific row wins (region > item type > condition > material). |
 | Where to take it | `data/collection_points.csv` | Per-region drop-off text, for example Haritha Karma Sena in Kerala. A rule can override it, as medicines do with pharmacy take-back. |
