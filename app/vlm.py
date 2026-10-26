@@ -1,7 +1,11 @@
-"""Stage 1: identify the waste item with a vision-language model on Hugging Face.
+"""Stage 1: identify the waste item with an open vision-language model.
 
 The model only names the item and picks keys from the closed taxonomy.
 It never decides the disposal method; that comes from the rules table.
+
+Backends, tried in order (whichever are configured):
+  1. OpenRouter free tier  (OPENROUTER_API_KEY) - Gemma 4, no cost, rate limited
+  2. Hugging Face Inference Providers (HF_TOKEN) - same Gemma 4, needs HF credits
 """
 import base64
 import json
@@ -18,7 +22,10 @@ from .taxonomy import (
 )
 
 DEFAULT_MODELS = "google/gemma-4-26B-A4B-it,Qwen/Qwen3-VL-8B-Instruct"
+OPENROUTER_URL = "https://openrouter.ai/api/v1"
+DEFAULT_OPENROUTER_MODELS = "google/gemma-4-26b-a4b-it:free,google/gemma-4-31b-it:free"
 TIME_BUDGET_SECONDS = 35  # stop starting new attempts after this; Vercel's function limit is 60 s
+ACCOUNT_ERRORS = (401, 402, 403)  # the same key will fail for every model on that backend
 
 
 class Identification(BaseModel):
@@ -101,21 +108,45 @@ def parse_identification(text: str, model: str = "") -> Identification:
     )
 
 
-def _models() -> list[str]:
-    return [m.strip() for m in os.getenv("VLM_MODELS", DEFAULT_MODELS).split(",") if m.strip()]
+def _split(value: str) -> list[str]:
+    return [m.strip() for m in value.split(",") if m.strip()]
 
 
-def _friendly_error(exc: Exception) -> str:
-    status = getattr(getattr(exc, "response", None), "status_code", None)
+def _backends() -> list[tuple[str, InferenceClient, list[str]]]:
+    """Configured backends as (name, client, models), free one first."""
+    backends = []
+    if key := os.getenv("OPENROUTER_API_KEY"):
+        client = InferenceClient(base_url=OPENROUTER_URL, api_key=key, timeout=25, headers={"X-Title": "Waste Guide"})
+        backends.append(("OpenRouter", client, _split(os.getenv("OPENROUTER_MODELS", DEFAULT_OPENROUTER_MODELS))))
+    if token := os.getenv("HF_TOKEN"):
+        client = InferenceClient(provider=os.getenv("HF_PROVIDER", "auto"), api_key=token, timeout=25)
+        backends.append(("Hugging Face", client, _split(os.getenv("VLM_MODELS", DEFAULT_MODELS))))
+    return backends
+
+
+def _status(exc: Exception) -> int | None:
+    return getattr(getattr(exc, "response", None), "status_code", None)
+
+
+def _friendly_error(exc: Exception, backend: str) -> str:
+    status = _status(exc)
+    key_name = "OPENROUTER_API_KEY" if backend == "OpenRouter" else "HF_TOKEN"
     if status == 401:
-        return "The Hugging Face token is invalid. Check HF_TOKEN in your .env file."
+        return f"The {backend} key is invalid. Check {key_name}."
     if status == 402:
-        return "Your Hugging Face account is out of inference credits."
+        if backend == "OpenRouter":
+            return "OpenRouter needs credits for this model. Use a ':free' model in OPENROUTER_MODELS."
+        return ("Your Hugging Face account has no inference credits (free accounts get none). "
+                "Add credits at huggingface.co/settings/billing, or set OPENROUTER_API_KEY to use the free tier.")
     if status == 403:
+        if backend == "OpenRouter":
+            return "OpenRouter refused the request. Check the key's limits and your privacy settings for free models."
         return "The Hugging Face token lacks permission. Enable 'Make calls to Inference Providers' on the token."
     if status == 429:
-        return "Too many requests to Hugging Face. Wait a moment and try again."
-    return f"The vision model could not be reached ({type(exc).__name__})."
+        if backend == "OpenRouter":
+            return "The free tier's limit is reached (20 per minute, 50 per day). Please try again later."
+        return f"Too many requests to {backend}. Wait a moment and try again."
+    return f"The vision model on {backend} could not be reached ({type(exc).__name__})."
 
 
 def _mock_identify(note: str) -> Identification:
@@ -138,9 +169,9 @@ def identify(image: bytes | None, mime: str = "image/jpeg", note: str = "") -> I
     if os.getenv("MOCK_VLM") == "1":
         return _mock_identify(note)
 
-    token = os.getenv("HF_TOKEN")
-    if not token:
-        raise VLMError("HF_TOKEN is not set. Add your Hugging Face token to the .env file.")
+    backends = _backends()
+    if not backends:
+        raise VLMError("No vision model is configured. Set OPENROUTER_API_KEY (free) or HF_TOKEN.")
 
     content: list[dict] = []
     if image:
@@ -149,24 +180,26 @@ def identify(image: bytes | None, mime: str = "image/jpeg", note: str = "") -> I
     content.append({"type": "text", "text": build_prompt(note, has_image=bool(image))})
     messages = [{"role": "user", "content": content}]
 
-    client = InferenceClient(provider=os.getenv("HF_PROVIDER", "auto"), api_key=token, timeout=25)
     deadline = time.monotonic() + TIME_BUDGET_SECONDS
-    last_error = "No vision models configured."
-    for model in _models():
-        for attempt in range(2):
-            if time.monotonic() > deadline:
-                raise VLMError("The vision model is taking too long right now. Please try again.")
-            try:
-                reply = client.chat.completions.create(
-                    model=model, messages=messages, max_tokens=400, temperature=0.1,
-                )
-                return parse_identification(reply.choices[0].message.content, model=model)
-            except (ValueError, json.JSONDecodeError):
-                last_error = f"{model} returned a reply that was not valid JSON."
-                continue  # retry the same model once
-            except Exception as exc:  # network / provider error: move to the next model
-                last_error = _friendly_error(exc)
-                if getattr(getattr(exc, "response", None), "status_code", None) in (401, 402, 403):
-                    raise VLMError(last_error) from exc  # token problem: other models will fail too
-                break
-    raise VLMError(last_error)
+    errors: list[str] = []
+    for backend, client, models in backends:
+        for model in models:
+            status = None
+            for _attempt in range(2):
+                if time.monotonic() > deadline:
+                    raise VLMError("The vision model is taking too long right now. Please try again.")
+                try:
+                    reply = client.chat.completions.create(
+                        model=model, messages=messages, max_tokens=400, temperature=0.1,
+                    )
+                    return parse_identification(reply.choices[0].message.content, model=model)
+                except ValueError:  # includes JSONDecodeError: retry the same model once
+                    errors.append(f"{model} returned a reply that was not valid JSON.")
+                    continue
+                except Exception as exc:  # provider error: move on to the next model
+                    status = _status(exc)
+                    errors.append(_friendly_error(exc, backend))
+                    break
+            if status in ACCOUNT_ERRORS:
+                break  # key or billing problem: skip this backend's other models
+    raise VLMError(errors[0] if errors else "No vision models configured.")

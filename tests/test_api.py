@@ -59,6 +59,7 @@ def test_correction_and_feedback_are_logged(client, tmp_path):
 def test_missing_token_gives_clear_error(client, monkeypatch):
     monkeypatch.setenv("MOCK_VLM", "0")
     monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     r = client.post("/api/identify", data={"note": "battery"})
     assert r.status_code == 502
     assert "HF_TOKEN" in r.json()["detail"]
