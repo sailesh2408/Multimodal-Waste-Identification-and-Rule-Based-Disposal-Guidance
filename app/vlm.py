@@ -23,8 +23,16 @@ from .taxonomy import (
 
 DEFAULT_MODELS = "google/gemma-4-26B-A4B-it,Qwen/Qwen3-VL-8B-Instruct"
 OPENROUTER_URL = "https://openrouter.ai/api/v1"
-DEFAULT_OPENROUTER_MODELS = "google/gemma-4-26b-a4b-it:free,google/gemma-4-31b-it:free"
+# Free vision models from different upstream providers, so one throttled upstream doesn't block us.
+DEFAULT_OPENROUTER_MODELS = ",".join([
+    "google/gemma-4-26b-a4b-it:free",       # Google AI Studio
+    "google/gemma-4-31b-it:free",           # Google AI Studio
+    "thinkingmachines/inkling-small:free",  # Thinking Machines
+    "nvidia/nemotron-3.5-super-vl:free",    # NVIDIA
+    "openrouter/free",                      # any free model that accepts images
+])
 TIME_BUDGET_SECONDS = 35  # stop starting new attempts after this; Vercel's function limit is 60 s
+MAX_TOKENS = 700
 ACCOUNT_ERRORS = (401, 402, 403)  # the same key will fail for every model on that backend
 
 
@@ -112,15 +120,17 @@ def _split(value: str) -> list[str]:
     return [m.strip() for m in value.split(",") if m.strip()]
 
 
-def _backends() -> list[tuple[str, InferenceClient, list[str]]]:
-    """Configured backends as (name, client, models), free one first."""
+def _backends() -> list[tuple[str, InferenceClient, list[str], dict]]:
+    """Configured backends as (name, client, models, extra request params), free one first."""
     backends = []
     if key := os.getenv("OPENROUTER_API_KEY"):
         client = InferenceClient(base_url=OPENROUTER_URL, api_key=key, timeout=25, headers={"X-Title": "Waste Guide"})
-        backends.append(("OpenRouter", client, _split(os.getenv("OPENROUTER_MODELS", DEFAULT_OPENROUTER_MODELS))))
+        # Reasoning tokens count against max_tokens; some free models reason at high effort by default.
+        extra = {"extra_body": {"reasoning": {"effort": "none"}}}
+        backends.append(("OpenRouter", client, _split(os.getenv("OPENROUTER_MODELS", DEFAULT_OPENROUTER_MODELS)), extra))
     if token := os.getenv("HF_TOKEN"):
         client = InferenceClient(provider=os.getenv("HF_PROVIDER", "auto"), api_key=token, timeout=25)
-        backends.append(("Hugging Face", client, _split(os.getenv("VLM_MODELS", DEFAULT_MODELS))))
+        backends.append(("Hugging Face", client, _split(os.getenv("VLM_MODELS", DEFAULT_MODELS)), {}))
     return backends
 
 
@@ -128,14 +138,32 @@ def _status(exc: Exception) -> int | None:
     return getattr(getattr(exc, "response", None), "status_code", None)
 
 
-def _friendly_error(exc: Exception, backend: str) -> str:
+def _server_detail(exc: Exception) -> str:
+    """The provider's own explanation, e.g. OpenRouter's error.message plus metadata.raw."""
+    try:
+        err = exc.response.json().get("error")
+        if isinstance(err, str):
+            return err[:300]
+        meta = err.get("metadata") or {}
+        parts = [err.get("message"), meta.get("raw") if isinstance(meta.get("raw"), str) else None]
+        return " - ".join(p for p in parts if p)[:300]
+    except Exception:
+        return str(getattr(exc, "server_message", None) or exc)[:300]
+
+
+def _is_account_limit(detail: str) -> bool:
+    """OpenRouter's per-account free limits (as opposed to a busy upstream provider)."""
+    return any(k in detail.lower() for k in ("per-day", "per-min", "per day", "per minute"))
+
+
+def _friendly_error(exc: Exception, backend: str, detail: str = "") -> str:
     status = _status(exc)
     key_name = "OPENROUTER_API_KEY" if backend == "OpenRouter" else "HF_TOKEN"
     if status == 401:
         return f"The {backend} key is invalid. Check {key_name}."
     if status == 402:
         if backend == "OpenRouter":
-            return "OpenRouter needs credits for this model. Use a ':free' model in OPENROUTER_MODELS."
+            return "OpenRouter needs credits for this model. Use ':free' models in OPENROUTER_MODELS."
         return ("Your Hugging Face account has no inference credits (free accounts get none). "
                 "Add credits at huggingface.co/settings/billing, or set OPENROUTER_API_KEY to use the free tier.")
     if status == 403:
@@ -143,10 +171,12 @@ def _friendly_error(exc: Exception, backend: str) -> str:
             return "OpenRouter refused the request. Check the key's limits and your privacy settings for free models."
         return "The Hugging Face token lacks permission. Enable 'Make calls to Inference Providers' on the token."
     if status == 429:
-        if backend == "OpenRouter":
-            return "The free tier's limit is reached (20 per minute, 50 per day). Please try again later."
-        return f"Too many requests to {backend}. Wait a moment and try again."
-    return f"The vision model on {backend} could not be reached ({type(exc).__name__})."
+        if backend == "OpenRouter" and "day" in detail.lower():
+            return "Today's free scans on OpenRouter are used up (50 a day; 1000 after a one-time $10 top-up). Try again tomorrow."
+        if backend == "OpenRouter" and _is_account_limit(detail):
+            return "Too many scans in the last minute. Wait a minute and try again."
+        return f"The free vision models on {backend} are busy right now. Please try again in a minute."
+    return f"The vision model on {backend} could not be reached ({status or type(exc).__name__})."
 
 
 def _mock_identify(note: str) -> Identification:
@@ -181,25 +211,29 @@ def identify(image: bytes | None, mime: str = "image/jpeg", note: str = "") -> I
     messages = [{"role": "user", "content": content}]
 
     deadline = time.monotonic() + TIME_BUDGET_SECONDS
-    errors: list[str] = []
-    for backend, client, models in backends:
+    errors: list[tuple[bool, str]] = []  # (is account-level, message)
+    for backend, client, models, extra in backends:
         for model in models:
-            status = None
+            status, detail = None, ""
             for _attempt in range(2):
                 if time.monotonic() > deadline:
                     raise VLMError("The vision model is taking too long right now. Please try again.")
                 try:
                     reply = client.chat.completions.create(
-                        model=model, messages=messages, max_tokens=400, temperature=0.1,
+                        model=model, messages=messages, max_tokens=MAX_TOKENS, temperature=0.1, **extra,
                     )
                     return parse_identification(reply.choices[0].message.content, model=model)
-                except ValueError:  # includes JSONDecodeError: retry the same model once
-                    errors.append(f"{model} returned a reply that was not valid JSON.")
+                except ValueError:  # includes JSONDecodeError and empty replies: retry the same model once
+                    errors.append((False, f"{model} returned a reply that was not valid JSON."))
                     continue
                 except Exception as exc:  # provider error: move on to the next model
-                    status = _status(exc)
-                    errors.append(_friendly_error(exc, backend))
+                    status, detail = _status(exc), _server_detail(exc)
+                    print(json.dumps({"log": "vlm_error", "backend": backend, "model": model,
+                                      "status": status, "detail": detail}), flush=True)
+                    account_level = status in ACCOUNT_ERRORS or _is_account_limit(detail)
+                    errors.append((account_level, _friendly_error(exc, backend, detail)))
                     break
-            if status in ACCOUNT_ERRORS:
-                break  # key or billing problem: skip this backend's other models
-    raise VLMError(errors[0] if errors else "No vision models configured.")
+            if status in ACCOUNT_ERRORS or _is_account_limit(detail):
+                break  # key, billing or account quota problem: this backend's other models will fail too
+    account = [msg for is_account, msg in errors if is_account]
+    raise VLMError((account or [msg for _, msg in errors] or ["No vision models configured."])[0])
