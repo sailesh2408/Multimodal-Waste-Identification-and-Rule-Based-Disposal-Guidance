@@ -1,0 +1,13 @@
+region,stream,where_to_take
+*,wet,"Compost it at home if you can; otherwise give it to your local body's wet waste collection."
+*,dry,"Give it to your local body's dry waste collector, or sell recyclables to a scrap dealer."
+*,hazardous,"Store it separately and hand it over to your waste collector as domestic hazardous waste, or take it to your local body's hazardous waste deposition centre."
+*,ewaste,"Give it to an authorised e-waste collection centre or the brand's take-back programme. Avoid informal scrap dealers who burn cables."
+*,sanitary,"Hand it over with dry waste, unless your local body collects sanitary waste separately."
+*,reuse,"Donate it to a charity or collection drive, or give it to someone who can use it."
+*,unknown,"Keep it aside and ask your local body or waste collector before throwing it away."
+IN-KL,wet,"Compost it at home (bio-bin, pipe compost or ring compost). If you can't, use your panchayat or municipality's wet waste collection."
+IN-KL,dry,"Hand it over clean and dry to the Haritha Karma Sena on their collection day."
+IN-KL,hazardous,"Store it separately and ask the Haritha Karma Sena or your panchayat or municipality office about domestic hazardous waste collection."
+IN-KL,ewaste,"Hand it over during a Haritha Karma Sena or Clean Kerala Company e-waste collection, or to an authorised e-waste collection centre or brand take-back."
+IN-KL,sanitary,"Hand it over as your panchayat or municipality directs; many local bodies collect sanitary waste separately."

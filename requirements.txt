@@ -1,0 +1,7 @@
+# Runtime dependencies (mirrors pyproject.toml). For tests: pip install -r requirements-dev.txt
+fastapi>=0.162
+huggingface_hub>=1.0
+python-multipart>=0.0.9
+python-dotenv>=1.0
+pydantic>=2.7
+uvicorn>=0.30

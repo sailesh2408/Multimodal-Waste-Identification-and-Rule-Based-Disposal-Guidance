@@ -1,0 +1,10 @@
+{
+  "name": "Waste Guide",
+  "short_name": "Waste Guide",
+  "description": "Snap a photo of any waste item and learn how to dispose of it.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f8f5",
+  "theme_color": "#1f6f4a",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

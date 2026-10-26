@@ -1,0 +1,53 @@
+{
+  "item_types": {
+    "battery":            { "label": "Battery",                     "group": "Hazardous",  "hint": "AA/AAA cells, button cells, phone or laptop batteries, power banks" },
+    "electronic_device":  { "label": "Electronic device",           "group": "E-waste",    "hint": "phones, laptops, tablets, remotes, small appliances, electronic toys" },
+    "charger_or_cable":   { "label": "Charger or cable",            "group": "E-waste",    "hint": "chargers, adapters, wires, earphones, cables" },
+    "led_bulb":           { "label": "LED bulb",                    "group": "E-waste",    "hint": "LED bulbs and LED tube lights" },
+    "cfl_or_tube_light":  { "label": "CFL or fluorescent tube",     "group": "Hazardous",  "hint": "CFL bulbs, fluorescent tube lights (contain mercury)" },
+    "mercury_thermometer":{ "label": "Mercury thermometer",         "group": "Hazardous",  "hint": "glass thermometers with silver liquid" },
+    "medicine":           { "label": "Medicine",                    "group": "Hazardous",  "hint": "tablet strips, capsules, syrups, ointments" },
+    "sharps":             { "label": "Needle or sharp",             "group": "Hazardous",  "hint": "syringes, needles, insulin pens, lancets, razor blades" },
+    "paint_or_chemical":  { "label": "Paint or chemical container", "group": "Hazardous",  "hint": "paint cans, pesticide bottles, cleaning chemicals, solvents" },
+    "aerosol_can":        { "label": "Aerosol can",                 "group": "Hazardous",  "hint": "spray cans: deodorant, insect spray, spray paint" },
+    "sanitary_waste":     { "label": "Sanitary waste",              "group": "Sanitary",   "hint": "used diapers, sanitary pads, tampons, condoms" },
+    "plastic_bottle":     { "label": "Plastic bottle",              "group": "Dry",        "hint": "water, soda, oil and shampoo bottles" },
+    "plastic_container":  { "label": "Plastic container",           "group": "Dry",        "hint": "tubs, boxes, takeaway containers, buckets" },
+    "plastic_bag":        { "label": "Plastic bag or film",         "group": "Dry",        "hint": "carry bags, milk pouches, cling film" },
+    "multilayer_packet":  { "label": "Multilayer packet",           "group": "Dry",        "hint": "chips, biscuit and chocolate wrappers, shiny pouches" },
+    "thermocol":          { "label": "Thermocol (EPS foam)",        "group": "Dry",        "hint": "packaging foam, foam plates and cups" },
+    "glass_bottle_or_jar":{ "label": "Glass bottle or jar",         "group": "Dry",        "hint": "intact glass bottles and jars" },
+    "broken_glass":       { "label": "Broken glass",                "group": "Dry",        "hint": "shards, broken bottles, broken mirrors" },
+    "metal_item":         { "label": "Metal can or foil",           "group": "Dry",        "hint": "food tins, drink cans, aluminium foil, bottle caps" },
+    "paper":              { "label": "Paper",                       "group": "Dry",        "hint": "newspaper, magazines, notebooks, office paper" },
+    "cardboard":          { "label": "Cardboard box",               "group": "Dry",        "hint": "shipping boxes, cartons" },
+    "food_packaging":     { "label": "Food packaging",              "group": "Dry",        "hint": "pizza boxes, paper takeaway boxes, paper plates" },
+    "paper_cup":          { "label": "Paper cup",                   "group": "Dry",        "hint": "plastic-lined paper cups" },
+    "tetra_pak":          { "label": "Tetra Pak carton",            "group": "Dry",        "hint": "juice and milk cartons" },
+    "food_waste":         { "label": "Food waste",                  "group": "Wet",        "hint": "leftovers, peels, tea leaves, eggshells, coconut scrapings" },
+    "garden_waste":       { "label": "Garden waste",                "group": "Wet",        "hint": "leaves, grass, flowers, small branches, coconut husk" },
+    "clothing_textile":   { "label": "Clothes or textile",          "group": "Dry",        "hint": "clothes, bedsheets, bags, curtains" },
+    "footwear":           { "label": "Footwear",                    "group": "Dry",        "hint": "shoes, slippers, sandals" },
+    "other":              { "label": "Something else",              "group": "Unknown",    "hint": "anything not listed above, or no clear waste item" }
+  },
+  "materials": ["plastic", "glass", "metal", "paper", "cardboard", "organic", "textile", "rubber", "electronic", "chemical", "mixed", "unknown"],
+  "conditions": {
+    "clean":    "Clean / good condition",
+    "food_soiled": "Food residue",
+    "greasy":   "Greasy / oily",
+    "wet":      "Wet",
+    "damaged":  "Damaged, broken, leaking or swollen",
+    "expired":  "Expired",
+    "used":     "Used",
+    "unknown":  "Not sure"
+  },
+  "streams": {
+    "wet":       { "label": "Wet waste",              "tone": "green"  },
+    "dry":       { "label": "Dry waste",              "tone": "blue"   },
+    "hazardous": { "label": "Domestic hazardous",     "tone": "red"    },
+    "ewaste":    { "label": "E-waste",                "tone": "purple" },
+    "sanitary":  { "label": "Sanitary waste",         "tone": "pink"   },
+    "reuse":     { "label": "Reuse or donate",        "tone": "teal"   },
+    "unknown":   { "label": "Check locally",          "tone": "gray"   }
+  }
+}

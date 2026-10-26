@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f7f2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d1310" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="Snap a photo of any waste item and learn which bin it goes in and how to prepare it.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
+  <title>Waste Guide</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Waste Guide home">
+      <img src="icon.svg" alt="" width="30" height="30">
+      <span>Waste Guide</span>
+    </a>
+    <label class="region">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
+      <span class="sr-only">Your region</span>
+      <select id="region"></select>
+    </label>
+  </header>
+
+  <main>
+    <!-- Capture -->
+    <section id="screen-capture" class="screen">
+      <div class="hero">
+        <span class="eyebrow-pill">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19c0-8 6-14 14-14 0 8-6 14-14 14z"/><path d="M5 19l8-8"/></svg>
+          Segregate at source
+        </span>
+        <h1>What are you <span class="accent">throwing away?</span></h1>
+        <p class="lead">Snap one item. We'll tell you which bin it belongs in and how to prepare it.</p>
+      </div>
+
+      <div class="viewfinder" id="viewfinder">
+        <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+
+        <label class="vf-empty" id="vf-empty">
+          <input type="file" id="camera-input" accept="image/*" capture="environment" class="sr-only">
+          <span class="vf-shutter">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+          </span>
+          <span class="vf-title">Tap to take a photo</span>
+          <span class="vf-sub">One item · good light · fill the frame</span>
+        </label>
+
+        <div class="vf-photo" id="vf-photo" hidden>
+          <img id="preview" alt="Your photo">
+          <div class="vf-actions">
+            <label class="glass-btn">
+              <input type="file" id="retake-input" accept="image/*" capture="environment" class="sr-only">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-3M4 13a8 8 0 0 0 14.9 3"/><path d="M5 3v5h5M19 21v-5h-5"/></svg>
+              Retake
+            </label>
+            <button id="clear-photo" class="glass-btn icon-only" type="button" aria-label="Remove photo">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <label class="btn btn-secondary" id="gallery-btn">
+        <input type="file" id="gallery-input" accept="image/*" class="sr-only">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 16l5-5 4 4 2-2 5 5"/><circle cx="15.5" cy="9.5" r="1.5"/></svg>
+        Choose from gallery
+      </label>
+
+      <div class="field">
+        <label for="note" class="field-label">Add details <span class="muted">(optional)</span></label>
+        <textarea id="note" rows="2" maxlength="300" placeholder="e.g. expired tablets, swollen phone battery, greasy pizza box"></textarea>
+      </div>
+
+      <button id="submit" class="btn btn-primary btn-xl" type="button" disabled>
+        Find out how to dispose
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+      <p id="capture-error" class="error" role="alert" hidden></p>
+
+      <section class="block">
+        <h2 class="block-title">No camera handy? Try one</h2>
+        <div class="chips" id="examples"></div>
+      </section>
+
+      <section class="block" id="impact-block" hidden>
+        <h2 class="block-title">Your impact</h2>
+        <div class="stats">
+          <div class="stat"><span class="stat-num" id="stat-sorted">0</span><span class="stat-label">items sorted</span></div>
+          <div class="stat stat-hazard"><span class="stat-num" id="stat-hazard">0</span><span class="stat-label">hazardous kept out of landfill</span></div>
+        </div>
+        <ul class="recent" id="recent"></ul>
+      </section>
+
+      <section class="block">
+        <h2 class="block-title">Know your bins</h2>
+        <div class="bins" id="bins"></div>
+      </section>
+    </section>
+
+    <!-- Loading -->
+    <section id="screen-loading" class="screen" hidden aria-live="polite">
+      <div class="scan">
+        <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+        <img id="loading-img" alt="">
+        <div class="scan-placeholder" id="loading-placeholder">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13"/></svg>
+        </div>
+        <div class="scanline"></div>
+      </div>
+      <ol class="progress" id="progress">
+        <li>Looking at your item</li>
+        <li>Working out material and condition</li>
+        <li>Matching disposal rules</li>
+      </ol>
+      <div class="tip">
+        <span class="tip-label">Did you know?</span>
+        <p id="tip-text"></p>
+      </div>
+    </section>
+
+    <!-- Result -->
+    <section id="screen-result" class="screen" hidden></section>
+  </main>
+
+  <footer>
+    Guidance follows India's Solid Waste Management Rules, 2016 and related rules.
+    Always follow your local body's instructions.
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
